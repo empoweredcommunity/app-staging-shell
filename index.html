@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Empowered Community — App Staging</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <style>
+    :root { --bg:#0b1220; --card:#111a2b; --ink:#e9eefc; --muted:#a8b3cf; --accent:#7db0ff; }
+    html,body { height:100%; margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; color:var(--ink); background:linear-gradient(180deg,#0a1020,#0f1630 40%,#0b1220); }
+    .wrap { max-width:760px; margin: 6vh auto; padding: 24px; }
+    .card { background: var(--card); border-radius:16px; padding:24px; box-shadow: 0 10px 30px rgba(0,0,0,.3); border:1px solid rgba(255,255,255,.06); }
+    h1 { margin:0 0 12px; font-size: 24px; letter-spacing:.2px; }
+    p { color: var(--muted); line-height:1.5; }
+    .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:12px; }
+    input[type="email"]{ flex:1; padding:12px 14px; border-radius:10px; border:1px solid rgba(255,255,255,.1); background:#0c1426; color:var(--ink); outline:none; }
+    button { padding:12px 16px; border-radius:10px; border:1px solid rgba(255,255,255,.12); background:#0e1a32; color:var(--ink); cursor:pointer; }
+    button.primary { background: linear-gradient(180deg,#3b82f6,#2563eb); border:none; }
+    .ok { color:#36d399; }
+    .bad { color:#ff7b7b; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; opacity:.9; }
+    .spacer { height: 8px; }
+    .hide { display:none; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#11203d; color:#a8c7ff; border:1px solid rgba(125,176,255,.25); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Empowered Community — Staging App Shell</h1>
+      <p id="status">Ready.</p>
+
+      <!-- Magic route handler panel (auto-runs if token present) -->
+      <div id="magicPanel" class="hide">
+        <p>Processing your sign-in…</p>
+        <div class="mono" id="magicLog"></div>
+        <div class="spacer"></div>
+        <button id="trustBtn" class="primary hide">Trust this device (30 days)</button>
+      </div>
+
+      <!-- Manual test panel (optional) -->
+      <div id="manualPanel">
+        <p><span class="pill">Manual test</span> Send yourself a sign-in link (staging).</p>
+        <div class="row">
+          <input id="email" type="email" placeholder="you@empowered.community" />
+          <button id="sendLinkBtn" class="primary">Send sign-in link</button>
+        </div>
+        <div class="spacer"></div>
+        <div class="mono" id="manualLog"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  // ===================== CONFIG =====================
+  const API_BASE = "https://api-staging.empowered.community";
+
+  // ===================== DOM HELPERS =====================
+  const $ = (sel) => document.querySelector(sel);
+  const statusEl = $("#status");
+  const magicPanel = $("#magicPanel");
+  const magicLog = $("#magicLog");
+  const manualPanel = $("#manualPanel");
+  const manualLog = $("#manualLog");
+  const trustBtn = $("#trustBtn");
+
+  function log(el, msg) {
+    el.innerHTML += (el.innerHTML ? "<br>" : "") + msg;
+  }
+  function setStatus(msg, cls="") {
+    statusEl.textContent = msg;
+    statusEl.className = cls;
+  }
+
+  // ===================== API =====================
+  async function apiGET(qs) {
+    const url = `${API_BASE}/?${qs}`;
+    const res = await fetch(url, { method: "GET", credentials: "include" });
+    const json = await res.json().catch(()=> ({}));
+    return { res, json };
+  }
+  async function apiPOST(op, body) {
+    const url = `${API_BASE}/?op=${encodeURIComponent(op)}`;
+    const res = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body || {})
+    });
+    const json = await res.json().catch(()=> ({}));
+    return { res, json };
+  }
+
+  // ===================== MAGIC HANDLER =====================
+  async function handleMagicIfPresent() {
+    const u = new URL(location.href);
+    const isMagicPath = u.pathname.replace(/\/+$/,'') === "/magic";
+    const token = u.searchParams.get("token");
+    if (!isMagicPath && !token) return; // nothing to do
+
+    // Show magic panel, hide manual
+    magicPanel.classList.remove("hide");
+    manualPanel.classList.add("hide");
+
+    setStatus("Processing sign-in…");
+    log(magicLog, `<b>Verifying token…</b>`);
+
+    // 1) Verify
+    const { res: vRes, json: vJson } = await apiGET(`op=auth.verify&token=${encodeURIComponent(token)}`);
+    log(magicLog, `verify → ${vRes.status} ${escapeHtml(JSON.stringify(vJson))}`);
+
+    if (!(vRes.ok && vJson && vJson.verified === true)) {
+      setStatus("Sign-in failed.", "bad");
+      return;
+    }
+
+    setStatus("✅ Signed in. You’re all set.", "ok");
+
+    // 2) Offer Trust Device (30d)
+    trustBtn.classList.remove("hide");
+    trustBtn.onclick = async () => {
+      trustBtn.disabled = true;
+      trustBtn.textContent = "Trusting…";
+      const { res: tRes, json: tJson } = await apiGET(`op=device.trust&trust_ttl_days=30`);
+      log(magicLog, `trust → ${tRes.status} ${escapeHtml(JSON.stringify(tJson))}`);
+      if (tRes.ok && tJson && tJson.expires_days) {
+        setStatus(`✅ Signed in. Device trusted for ${tJson.expires_days} days. Receipt: ${tJson.receipt}`, "ok");
+      } else {
+        setStatus(`Signed in. Could not trust device right now.`, "bad");
+      }
+      trustBtn.disabled = false;
+      trustBtn.textContent = "Trust this device (30 days)";
+    };
+  }
+
+  // ===================== MANUAL TEST (optional) =====================
+  async function sendLink() {
+    const email = $("#email").value.trim();
+    if (!email) { setStatus("Enter your email.", "bad"); return; }
+    setStatus("Requesting sign-in link…");
+    const { res, json } = await apiGET(`op=auth.request&email=${encodeURIComponent(email)}&echo_mode=1`);
+    log(manualLog, `auth.request → ${res.status} ${escapeHtml(JSON.stringify(json))}`);
+    if (!(res.ok && json && json.request_id)) {
+      setStatus("Failed to request link.", "bad");
+      return;
+    }
+    // In staging we expose magic_link for convenience
+    if (json.magic_link) {
+      log(manualLog, `<b>Magic link:</b> <a href="${json.magic_link}">${json.magic_link}</a>`);
+      setStatus("Link created. (Staging shows the magic link above.)", "ok");
+    } else {
+      setStatus("Link sent (check your email).", "ok");
+    }
+  }
+
+  // ===================== UTIL =====================
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ===================== BOOT =====================
+  document.addEventListener("DOMContentLoaded", () => {
+    $("#sendLinkBtn").addEventListener("click", sendLink);
+    handleMagicIfPresent();
+  });
+  </script>
+</body>
+</html>
